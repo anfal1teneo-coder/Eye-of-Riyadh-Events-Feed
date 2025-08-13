@@ -147,4 +147,86 @@ def scrape_listings():
             dedup[key] = e
     return list(dedup.values())
 
-def enrich_from_detail
+def enrich_from_detail(event):
+    if not event.get("link"):
+        return event
+    try:
+        res = fetch(event["link"])
+    except Exception:
+        return event
+    soup = BeautifulSoup(res.text, "html.parser")
+    if not event.get("date_text"):
+        d = pick(soup, SELECTORS["detail_date"])
+        event["date_text"] = first_text(d)
+    if not event.get("location"):
+        l = pick(soup, SELECTORS["detail_location"])
+        event["location"] = first_text(l)
+    desc_el = pick(soup, SELECTORS["detail_desc"])
+    event["description"] = first_text(desc_el)
+    return event
+
+def to_uid(s):
+    return hashlib.md5(s.encode("utf-8")).hexdigest() + "@eyeofriyadh"
+
+def build_ics(events):
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//EyeOfRiyadh ICS//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH"
+    ]
+    now_utc = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    for ev in events:
+        title = normalize(ev.get("title") or "Untitled Event")
+        link = ev.get("link") or BASE_URL
+        start, end = parse_dt(ev.get("date_text"))
+        if not start:
+            start = TZ.localize(datetime.now().replace(hour=9, minute=0, second=0, microsecond=0))
+        if not end:
+            end = start + timedelta(hours=8)
+        uid = to_uid(f"{title}|{link}|{start.isoformat()}")
+        desc_parts = []
+        if ev.get("description"):
+            desc_parts.append(ev["description"])
+        desc_parts.append(f"More info: {link}")
+        desc = normalize(" ".join(desc_parts))
+        location = normalize(ev.get("location") or "Riyadh, Saudi Arabia")
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{now_utc}",
+            f"SUMMARY:{title}",
+            f"DTSTART;TZID=Asia/Riyadh:{start.strftime('%Y%m%dT%H%M%S')}",
+            f"DTEND;TZID=Asia/Riyadh:{end.strftime('%Y%m%dT%H%M%S')}",
+            f"LOCATION:{location}",
+            "DESCRIPTION:" + desc.replace('\\n', ' ').replace('\n', ' '),
+            f"URL:{link}",
+            "END:VEVENT"
+        ])
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
+def main():
+    os.makedirs(OUT_DIR, exist_ok=True)
+    log.info("Scraping listings...")
+    events = scrape_listings()
+    log.info("Found ~%d events. Enriching...", len(events))
+    enriched = []
+    for e in events:
+        enriched.append(enrich_from_detail(e))
+        time.sleep(0.2)
+    # keep future and past week
+    keep = []
+    today = TZ.localize(datetime.now()).date()
+    for e in enriched:
+        start, _ = parse_dt(e.get("date_text"))
+        if not start or start.date() >= today - timedelta(days=7):
+            keep.append(e)
+    ics = build_ics(keep)
+    with open(OUT_FILE, "w", encoding="utf-8") as f:
+        f.write(ics)
+    log.info("Wrote %s", OUT_FILE)
+
+if __name__ == "__main__":
+    main()
