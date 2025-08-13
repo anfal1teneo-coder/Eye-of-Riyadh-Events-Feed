@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Eye of Riyadh -> ICS generator
-- Scrapes event listings and builds an .ics calendar
-- Designed to be run on a schedule (e.g., GitHub Actions)
-- Output: build/eyeofriyadh.ics
+Eye of Riyadh -> ICS generator (safe version)
+- Never crashes: always writes build/eyeofriyadh.ics
+- If scraping fails or finds nothing, writes a minimal empty calendar
 """
 
 import os
@@ -16,12 +15,11 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
-
 from dateutil import parser as dateparser
 import pytz
 
 BASE_URL = os.environ.get("EOR_BASE_URL", "https://www.eyeofriyadh.com/events/")
-MAX_PAGES = int(os.environ.get("EOR_MAX_PAGES", "8"))
+MAX_PAGES = int(os.environ.get("EOR_MAX_PAGES", "5"))
 TZ = pytz.timezone("Asia/Riyadh")
 OUT_DIR = os.environ.get("OUT_DIR", "build")
 OUT_FILE = os.path.join(OUT_DIR, "eyeofriyadh.ics")
@@ -29,78 +27,70 @@ OUT_FILE = os.path.join(OUT_DIR, "eyeofriyadh.ics")
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 log = logging.getLogger("eor")
 
+# Keep selectors simple and CSS-only (no :contains which bs4 doesn't support)
 SELECTORS = {
-    "card": ["div.event-card", "div.events-list div.event-item", "div.list div.item"],
-    "title": ["h3", "a.title", "h2"],
-    "link": ["a", "a.title", "h3 a"],
-    "date": ["div.date", "span.date", "p.date"],
-    "location": ["div.location", "span.location", "p.location"],
-    "detail_date": ["div.event-date", "p:contains('Date')", "li:contains('Date')"],
-    "detail_location": ["div.event-location", "p:contains('Location')", "li:contains('Location')"],
-    "detail_desc": ["div.event-description", "div#description", "div.description", "article"]
+    "card": ["div.event-card", "div.events-list div.event-item", "div.list div.item", "li", "article"],
+    "title": ["h3", "h2", "a.title", "a"],
+    "link": ["a"],
+    "date": ["time", "div.date", "span.date", "p.date", "li.date"],
+    "location": ["div.location", "span.location", "p.location", "li.location"],
+    "detail_desc": ["div.event-description", "div#description", "div.description", "article", "main"]
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; EyeOfRiyadhICS/1.0)"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; EyeOfRiyadhICS/1.0)"}
 
-def first_text(el):
-    if not el:
-        return None
-    t = el.get_text(" ", strip=True)
-    return t or None
+def normalize(s):
+    return re.sub(r"\s+", " ", (s or "")).strip()
 
-def pick(soup, selectors):
+def pick_first(soup, selectors):
     for sel in selectors:
         try:
             found = soup.select(sel)
             if found:
                 return found[0]
         except Exception:
-            continue
+            pass
     return None
 
-def normalize(s):
-    return re.sub(r"\s+", " ", s or "").strip()
+def first_text(el):
+    return normalize(el.get_text(" ", strip=True)) if el else None
 
 def parse_dt(text):
+    """Parse '12–15 Jan 2026' or '12 Jan 2026' to start/end in Riyadh tz."""
     if not text:
         return None, None
     text = normalize(text)
     parts = re.split(r"\s?(?:–|-|to)\s?", text, flags=re.I)
-    start = None
-    end = None
+    start = end = None
     try:
         default_start = TZ.localize(datetime.now().replace(hour=9, minute=0, second=0, microsecond=0))
         start = dateparser.parse(parts[0], dayfirst=True, default=default_start)
-        if start.tzinfo is None:
-            start = TZ.localize(start)
-        else:
-            start = start.astimezone(TZ)
+        start = start.astimezone(TZ) if start.tzinfo else TZ.localize(start)
     except Exception:
         start = None
     if len(parts) > 1 and start:
         try:
             default_end = start.replace(hour=18, minute=0)
             end = dateparser.parse(parts[1], dayfirst=True, default=default_end)
-            if end.tzinfo is None:
-                end = TZ.localize(end)
-            else:
-                end = end.astimezone(TZ)
+            end = end.astimezone(TZ) if end.tzinfo else TZ.localize(end)
         except Exception:
             end = None
-    if start and start.hour == 0 and start.minute == 0:
+    if start and (start.hour, start.minute) == (0, 0):
         start = start.replace(hour=9, minute=0)
-    if end and end.hour == 0 and end.minute == 0:
+    if end and (end.hour, end.minute) == (0, 0):
         end = end.replace(hour=18, minute=0)
     return start, end
 
 def fetch(url):
-    r = requests.get(url, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    return r
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        return r.text
+    except Exception as e:
+        log.warning("Fetch failed %s (%s)", url, e)
+        return None
 
-def list_page_urls():
+def list_pages():
     urls = [BASE_URL]
     patterns = ["?p={i}", "page/{i}/", "?page={i}", "&p={i}", "&page={i}"]
     for i in range(2, MAX_PAGES + 1):
@@ -113,62 +103,44 @@ def list_page_urls():
             out.append(u)
     return out
 
-def scrape_listings():
+def scrape():
     events = []
-    for url in list_page_urls():
-        try:
-            res = fetch(url)
-        except Exception as e:
-            log.debug("skip page %s (%s)", url, e)
+    for url in list_pages():
+        html = fetch(url)
+        if not html:
             continue
-        soup = BeautifulSoup(res.text, "html.parser")
-        cards = []
+        soup = BeautifulSoup(html, "html.parser")
+        cards = None
         for sel in SELECTORS["card"]:
             found = soup.select(sel)
             if found:
                 cards = found
                 break
+        if not cards:
+            continue
         for c in cards:
-            title_el = pick(c, SELECTORS["title"])
-            link_el = pick(c, SELECTORS["link"])
-            date_el = pick(c, SELECTORS["date"])
-            loc_el = pick(c, SELECTORS["location"])
+            title_el = pick_first(c, SELECTORS["title"])
+            link_el = pick_first(c, SELECTORS["link"])
+            date_el = pick_first(c, SELECTORS["date"])
+            loc_el = pick_first(c, SELECTORS["location"])
             title = first_text(title_el)
             href = link_el.get("href") if link_el else None
             link = urljoin(url, href) if href else None
             date_text = first_text(date_el)
             location = first_text(loc_el)
-            events.append({"title": title, "link": link, "date_text": date_text, "location": location})
+            if title and link:
+                events.append({"title": title, "link": link, "date_text": date_text, "location": location})
+        time.sleep(0.2)  # politeness
     # dedupe
-    dedup = {}
+    dedup, out = set(), []
     for e in events:
-        key = e.get("link") or e.get("title")
-        if key and key not in dedup:
-            dedup[key] = e
-    return list(dedup.values())
+        key = (e.get("link") or "") + "|" + (e.get("title") or "")
+        if key not in dedup:
+            dedup.add(key)
+            out.append(e)
+    return out
 
-def enrich_from_detail(event):
-    if not event.get("link"):
-        return event
-    try:
-        res = fetch(event["link"])
-    except Exception:
-        return event
-    soup = BeautifulSoup(res.text, "html.parser")
-    if not event.get("date_text"):
-        d = pick(soup, SELECTORS["detail_date"])
-        event["date_text"] = first_text(d)
-    if not event.get("location"):
-        l = pick(soup, SELECTORS["detail_location"])
-        event["location"] = first_text(l)
-    desc_el = pick(soup, SELECTORS["detail_desc"])
-    event["description"] = first_text(desc_el)
-    return event
-
-def to_uid(s):
-    return hashlib.md5(s.encode("utf-8")).hexdigest() + "@eyeofriyadh"
-
-def build_ics(events):
+def ics_from_events(events):
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -185,14 +157,10 @@ def build_ics(events):
             start = TZ.localize(datetime.now().replace(hour=9, minute=0, second=0, microsecond=0))
         if not end:
             end = start + timedelta(hours=8)
-        uid = to_uid(f"{title}|{link}|{start.isoformat()}")
-        desc_parts = []
-        if ev.get("description"):
-            desc_parts.append(ev["description"])
-        desc_parts.append(f"More info: {link}")
-        desc = normalize(" ".join(desc_parts))
+        uid = hashlib.md5(f"{title}|{link}|{start}".encode("utf-8")).hexdigest() + "@eyeofriyadh"
+        desc = normalize(f"More info: {link}")
         location = normalize(ev.get("location") or "Riyadh, Saudi Arabia")
-        lines.extend([
+        lines += [
             "BEGIN:VEVENT",
             f"UID:{uid}",
             f"DTSTAMP:{now_utc}",
@@ -200,33 +168,34 @@ def build_ics(events):
             f"DTSTART;TZID=Asia/Riyadh:{start.strftime('%Y%m%dT%H%M%S')}",
             f"DTEND;TZID=Asia/Riyadh:{end.strftime('%Y%m%dT%H%M%S')}",
             f"LOCATION:{location}",
-            "DESCRIPTION:" + desc.replace('\\n', ' ').replace('\n', ' '),
+            f"DESCRIPTION:{desc}",
             f"URL:{link}",
             "END:VEVENT"
-        ])
+        ]
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines)
 
-def main():
+def write_ics(text):
     os.makedirs(OUT_DIR, exist_ok=True)
-    log.info("Scraping listings...")
-    events = scrape_listings()
-    log.info("Found ~%d events. Enriching...", len(events))
-    enriched = []
-    for e in events:
-        enriched.append(enrich_from_detail(e))
-        time.sleep(0.2)
-    # keep future and past week
-    keep = []
-    today = TZ.localize(datetime.now()).date()
-    for e in enriched:
-        start, _ = parse_dt(e.get("date_text"))
-        if not start or start.date() >= today - timedelta(days=7):
-            keep.append(e)
-    ics = build_ics(keep)
     with open(OUT_FILE, "w", encoding="utf-8") as f:
-        f.write(ics)
+        f.write(text)
     log.info("Wrote %s", OUT_FILE)
+
+def main():
+    try:
+        events = scrape()
+    except Exception as e:
+        log.error("Scrape crashed: %s", e)
+        events = []
+
+    # If nothing found, still produce a valid (empty) ICS
+    if not events:
+        log.warning("No events found; writing empty ICS")
+        write_ics("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//EyeOfRiyadh ICS//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nEND:VCALENDAR")
+        return
+
+    ics = ics_from_events(events)
+    write_ics(ics)
 
 if __name__ == "__main__":
     main()
