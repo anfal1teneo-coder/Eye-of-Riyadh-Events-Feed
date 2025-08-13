@@ -26,7 +26,6 @@ jobs:
           pip install -r requirements.txt
           python -c "import requests, bs4, dateutil, pytz; print('deps ok')"
 
-      # Do not fail the job if scraping hiccups; we'll publish a fallback ICS.
       - name: Run scraper (tolerate errors)
         continue-on-error: true
         env:
@@ -40,14 +39,7 @@ jobs:
         run: |
           mkdir -p build
           if [ ! -f build/eyeofriyadh.ics ]; then
-            cat > build/eyeofriyadh.ics <<'EOF'
-BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//EyeOfRiyadh ICS Fallback//EN
-CALSCALE:GREGORIAN
-METHOD:PUBLISH
-END:VCALENDAR
-EOF
+            printf 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//EyeOfRiyadh ICS Fallback//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nEND:VCALENDAR\r\n' > build/eyeofriyadh.ics
           fi
           ls -la build
 
