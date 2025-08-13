@@ -24,14 +24,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python - <<'PY'
-import requests, bs4, dateutil, pytz
-print("deps ok")
-PY
+          python -c "import requests, bs4, dateutil, pytz; print('deps ok')"
 
-      # Don't fail the whole job if scraping has a temporary issue
+      # Do not fail the job if scraping hiccups; we'll publish a fallback ICS.
       - name: Run scraper (tolerate errors)
-        id: run_scraper
         continue-on-error: true
         env:
           LOG_LEVEL: DEBUG
@@ -40,7 +36,6 @@ PY
           set -euxo pipefail
           python scraper.py || echo "scraper failed – will create fallback ICS"
 
-      # Guarantee an ICS exists so publish never fails
       - name: Ensure ICS exists (fallback if scraper failed)
         run: |
           mkdir -p build
