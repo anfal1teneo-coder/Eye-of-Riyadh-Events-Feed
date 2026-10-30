@@ -4,12 +4,43 @@ PRODID:-//EyeOfRiyadh ICS//EN
 CALSCALE:GREGORIAN
 METHOD:PUBLISH
 BEGIN:VEVENT
-UID:test-1793272515@eyeofriyadh
-DTSTAMP:20261029T111515Z
-SUMMARY:TEST: Eye of Riyadh feed wiring
-DTSTART;TZID=Asia/Riyadh:20261030T100000
-DTEND;TZID=Asia/Riyadh:20261030T110000
-LOCATION:Riyadh
-URL:https://www.eyeofriyadh.com/events/
+UID:b266f84fae20ed10c551362d131f0c8e@eyeofriyadh
+DTSTAMP:20261030T110625Z
+SUMMARY:ADD YOUR EVENT
+DTSTART;TZID=Asia/Riyadh:20261030T090000
+DTEND;TZID=Asia/Riyadh:20261030T170000
+LOCATION:Riyadh, Saudi Arabia
+DESCRIPTION:More info: https://www.eyeofriyadh.com/member/event_edit.php
+URL:https://www.eyeofriyadh.com/member/event_edit.php
+END:VEVENT
+BEGIN:VEVENT
+UID:b3e3ab0e17159e8eee003bed00af44c0@eyeofriyadh
+DTSTAMP:20261030T110625Z
+SUMMARY:SPONSOR EVENTS
+DTSTART;TZID=Asia/Riyadh:20261030T090000
+DTEND;TZID=Asia/Riyadh:20261030T170000
+LOCATION:Riyadh, Saudi Arabia
+DESCRIPTION:More info: https://www.eyeofriyadh.com/contactus.php
+URL:https://www.eyeofriyadh.com/contactus.php
+END:VEVENT
+BEGIN:VEVENT
+UID:f7a916d807b3baedc4a81267b9795d25@eyeofriyadh
+DTSTAMP:20261030T110625Z
+SUMMARY:VIEW ALL EVENTS
+DTSTART;TZID=Asia/Riyadh:20261030T090000
+DTEND;TZID=Asia/Riyadh:20261030T170000
+LOCATION:Riyadh, Saudi Arabia
+DESCRIPTION:More info: https://www.eyeofriyadh.com/events/?getevent=all
+URL:https://www.eyeofriyadh.com/events/?getevent=all
+END:VEVENT
+BEGIN:VEVENT
+UID:f1b15eeff88eb2fc5703ce6a2c6b44fb@eyeofriyadh
+DTSTAMP:20261030T110625Z
+SUMMARY:VIEW EVENT NEWSLETTER
+DTSTART;TZID=Asia/Riyadh:20261030T090000
+DTEND;TZID=Asia/Riyadh:20261030T170000
+LOCATION:Riyadh, Saudi Arabia
+DESCRIPTION:More info: https://www.eyeofriyadh.com/eventnewsletter.php
+URL:https://www.eyeofriyadh.com/eventnewsletter.php
 END:VEVENT
 END:VCALENDAR
